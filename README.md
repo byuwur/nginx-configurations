@@ -1,119 +1,187 @@
-# NGINX Configurations
+# Reusable Nginx configuration
 
-This repository contains a collection of NGINX configuration files to help you set up and manage various server environments. These configurations cover a range of use cases including fastcgi, reverse proxy, PHP handling, MySQL integration, and more.
+A small set of reusable Nginx configurations for PHP front-controller applications, with optional RTMP ingest and HLS playback.
 
-## Table of Contents
+## Files and configuration contexts
 
--   [Files](#files)
--   [Usage](#usage)
--   [License](#license)
+```text
+nginx.conf/
+├── nginx.conf       # main, events, and http contexts
+├── site.conf        # included inside an HTTP server block
+├── rtmp.conf        # optional main-context RTMP block
+├── rtmp/
+│   ├── auth.php     # publish authorization callback
+│   ├── index.php    # small HLS player demo
+│   └── site.conf    # optional HTTP server locations for auth and HLS
+├── _install.php.macos.sh  # optional Homebrew setup helper
+├── _restart.php.macos.sh  # optional Homebrew restart helper
+├── LICENSE.md
+└── README.md
+```
 
-## Files
+Nginx configuration has explicit levels:
 
-### 1. `install_MacNginxPHPmysql.sh`
+- The system file, commonly `/etc/nginx/nginx.conf`, contains workers, `events {}`, `http {}`, optional `rtmp {}`, and global includes.
+- A virtual host, commonly `/etc/nginx/sites-available/example.com`, contains `listen`, `server_name`, `root`, TLS, and includes reusable server-level configuration.
+- Application configuration such as `site.conf` contains routing, PHP handling, access restrictions, headers, and error handling.
 
-A shell script to install and configure NGINX, PHP, and MySQL on macOS. It automates the setup process for a local development environment.
+Unlike Apache `.htaccess`, Nginx does not discover configuration in a project's web root. Every file must be included explicitly from active Nginx configuration.
 
-### 2. `start_MacNginxPHPmysql.sh`
+Paths in this repository use common Debian/Ubuntu locations. Nginx package layout, service user, and PHP-FPM endpoint vary on other distributions and macOS.
 
-A shell script to start NGINX, PHP, and MySQL on macOS. This script is often used after running the installation script to begin services.
+The macOS scripts preserve the original Homebrew workflow as optional helpers. Review their package names and options against the current Homebrew formulae before running them.
 
-### 3. `nginx.conf`
+## System configuration
 
-The main configuration file for NGINX. It includes global settings and can include other configuration files.
+Use `nginx.conf` as a concise reference or install it as the system configuration after checking these values:
 
-### 4. `nginx.conf.default`
+- `user www-data` must name the account used by your Nginx package.
+- `/etc/nginx/mime.types`, `/etc/nginx/conf.d`, and `/etc/nginx/sites-enabled` must match the package layout.
+- The system-provided MIME and FastCGI parameter files remain owned and updated by the Nginx package.
 
-A default configuration file provided by NGINX. This file serves as a starting point and can be customized as needed.
+RTMP is disabled by default, so the base configuration starts without the RTMP module. Leave the final `include /etc/nginx/rtmp.conf;` commented unless RTMP support is installed and configured.
 
-### 5. `server.common.conf`
+## Virtual host and PHP SPA
 
-A file containing common server configurations that can be included in other server blocks. It helps maintain consistency across multiple server configurations.
-
-### 6. `localhost.conf`
-
-Generic NGINX configuration for localhost. It can be used as a template for setting up other local development environments.
-
-### 7. `localhost.byuwur.conf`
-
-NGINX configuration for a `byuwur` local development environment, containing server block configurations for the `byuwur` application.
-
-### 8. `location.php.conf`
-
-This file contains location blocks to handle PHP requests. It is typically included in other server block configurations.
-
-### 9. `location.phpmyadmin.conf`
-
-This configuration is used to serve the `phpMyAdmin` interface securely, typically within a local or restricted environment.
-
-### 10. `location.router.conf`
-
-This file configures NGINX to work with client-side routers, often used in single-page applications (SPAs) where the URL paths need to be handled by the frontend application.
-
-### 11. `location.tv.conf`
-
-Configuration for serving a TV-related application. It includes specific location blocks and other server configurations.
-
-### 12. `location.blacklist.conf`
-
-This configuration file is used to deny access to certain IP addresses or ranges. Useful for blocking unwanted traffic.
-
-### 13. `fastcgi.conf`
-
-This file is an alternative to `fastcgi_params` and includes more detailed configuration options for FastCGI.
-
-### 14. `fastcgi_params`
-
-This file contains standard parameters required by FastCGI. It is typically used when setting up PHP-FPM with NGINX.
-
-### 15. `scgi_params`
-
-Parameters used by SCGI, another protocol similar to FastCGI. It is used in configurations where SCGI is the chosen protocol for handling requests.
-
-### 16. `uwsgi_params`
-
-Parameters required by uWSGI, which is often used for serving Python applications. This file is used when configuring NGINX to work with uWSGI.
-
-### 17. `rtmp.conf`
-
-Configuration for RTMP (Real-Time Messaging Protocol), often used for streaming media.
-
-### 18. `mime.types`
-
-Defines the MIME types recognized by NGINX. This file helps NGINX serve files with the correct content type.
-
-### 19. `koi-utf`
-
-This file defines character encoding mappings for KOI8-U and UTF-8, commonly used in Russian-speaking environments.
-
-### 20. `koi-win`
-
-Similar to `koi-utf`, but this file maps KOI8-WIN encoding to UTF-8, often used in legacy systems.
-
-### 21. `win-utf`
-
-Similar to `koi-utf`, this file maps Windows code pages to UTF-8, ensuring proper character encoding.
-
-## Usage
-
-To use these configurations, copy the relevant files to your NGINX configuration directory (usually `/etc/nginx/` on Linux systems or `/usr/local/etc/nginx/` on macOS). You can include or modify these configurations in your `nginx.conf` or other server-specific configuration files.
-
-For example, to include the `fastcgi_params` in your server block:
+Install `site.conf` somewhere such as `/etc/nginx/snippets/php-spa-site.conf`, then include it inside each applicable site:
 
 ```nginx
 server {
     listen 80;
     server_name example.com;
+    root /var/www/example/public;
+
+    include /etc/nginx/snippets/php-spa-site.conf;
+}
+```
+
+The reusable file deliberately does not set a domain, document root, TLS certificate, or PHP version. It provides:
+
+- `home.php` as the preferred index and front controller.
+- `try_files $uri $uri/ /home.php?uri=$uri&$args`, preserving the request URI and query string.
+- PHP execution only for scripts that exist.
+- Shared handling for 400, 401, 403, 404, 500, 502, 503, and 504 through `/_error.php?e=$status`.
+- Re-entry protection if the error handler itself fails.
+- Safe `nosniff`, referrer, and framing headers on all response statuses.
+- Blocking for TRACE/TRACK, hidden path segments, sensitive/development files, editor backups, and archives outside approved download directories.
+
+Exact public exceptions are limited to `/robots.txt`, `/ads.txt`, `/app-ads.txt`, `/humans.txt`, `/.well-known/security.txt`, `/manifest.json`, `/.well-known/assetlinks.json`, `/sitemap.xml`, `/sitemap_index.xml`, and `/browserconfig.xml`. `/.well-known/acme-challenge/` is also available for HTTP-01 validation. Arbitrary TXT, JSON, XML, YAML, and Markdown files remain blocked.
+
+Archives are public only below `/downloads/` and `/releases/`, including nested paths. Edit the first archive location in `site.conf` to change that allowlist.
+
+Change the PHP-FPM endpoint in `site.conf` for the target system. The committed TCP example is:
+
+```nginx
+fastcgi_pass 127.0.0.1:9000;
+```
+
+A typical socket alternative is:
+
+```nginx
+fastcgi_pass unix:/run/php/php8.x-fpm.sock;
+```
+
+The socket name is deployment-specific. The configuration uses the package's `/etc/nginx/fastcgi_params` and sets `SCRIPT_FILENAME` to `$document_root$fastcgi_script_name`.
+
+If the error handler is stored somewhere other than `/_error.php`, change the `error_page` URI. For example, a project that exposes SPA.php as a subdirectory may use `/spa.php/_error.php?e=$status`.
+
+## Optional RTMP and HLS
+
+RTMP requires an Nginx build or package containing `nginx-rtmp-module`. Copy `rtmp.conf` to the configured Nginx directory, make these two paths identical, and give the Nginx worker write access:
+
+```nginx
+# rtmp.conf
+hls_path /var/lib/nginx/hls;
+
+# rtmp/site.conf
+alias /var/lib/nginx/hls/;
+```
+
+Enable RTMP from the main context, alongside `http {}` rather than inside it:
+
+```nginx
+include /etc/nginx/rtmp.conf;
+```
+
+Copy the repository's `rtmp/` application files under the streaming virtual host's document root, or adjust `$document_root/rtmp/auth.php` in `rtmp/site.conf`. Include both reusable server files in that host:
+
+```nginx
+server {
+    listen 80;
+    server_name stream.example.com;
+    root /var/www/stream.example.com/public;
+
+    include /etc/nginx/snippets/php-spa-site.conf;
+    include /etc/nginx/snippets/rtmp-site.conf;
+}
+```
+
+`rtmp/site.conf` adds a loopback-only listener on port 8080 for the authorization callback and repeats the PHP-FPM endpoint used by `site.conf`. If that port or endpoint changes, keep `rtmp.conf`, `rtmp/site.conf`, and `site.conf` synchronized. The HLS location serves `.m3u8` and `.ts` with live-stream MIME types and no-cache headers. It does not enable CORS; add `Access-Control-Allow-Origin` only when the player is intentionally hosted on another origin.
+
+Set a long random `RTMP_STREAM_KEY` in the PHP-FPM service or pool environment. PHP-FPM commonly clears its environment, so expose it explicitly in the pool configuration without committing the real value to this repository:
+
+```ini
+env[RTMP_STREAM_KEY] = your-deployment-secret
+```
+
+Restart PHP-FPM after changing its environment. If the variable is absent, the callback fails closed with 503.
+
+Configure an encoder with:
+
+```text
+Server:     rtmp://stream.example.com/tv
+Stream key: live?token=your-deployment-secret
+```
+
+The public stream name is `live`; the token is used only for authorization and is not placed in the HLS path. With `hls_nested on`, viewers use:
+
+```text
+https://stream.example.com/tv/live/index.m3u8
+```
+
+The demo player is available at `/rtmp/?stream=live`. It uses the same-origin HLS URL and a pinned HTTPS Video.js release. Self-host the Video.js assets if the deployment must work without a third-party CDN.
+
+Direct RTMP playback is denied because HLS is the viewer transport. Publishing accepts only POST callbacks, validates the callback fields and stream name, and compares the token with `hash_equals`.
+
+## Optional phpMyAdmin
+
+phpMyAdmin is intentionally not exposed by `site.conf`. A separate loopback-only virtual host avoids silently adding `/phpmyadmin` to every application and keeps its installation path independent:
+
+```nginx
+server {
+    listen 127.0.0.1:8081;
+    server_name _;
+    root /path/to/phpmyadmin;
+    index index.php;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
 
     location ~ \.php$ {
-        include fastcgi_params;
-        fastcgi_pass unix:/var/run/php-fpm.sock;
-        fastcgi_index index.php;
+        try_files $uri =404;
+        include /etc/nginx/fastcgi_params;
         fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_pass 127.0.0.1:9000;
     }
 }
 ```
 
+Replace the root and PHP-FPM endpoint. Use a private network allowlist, VPN, SSH tunnel, or additional authentication if access must extend beyond the local machine.
+
+## Deployment checks
+
+After installing or changing configuration, run:
+
+```sh
+sudo nginx -t
+sudo nginx -T
+```
+
+The first command validates syntax and contexts. The expanded output from the second confirms which files are active and helps detect duplicate `location` blocks. Reload Nginx only after validation succeeds.
+
+Content Security Policy is intentionally omitted because it requires an application-specific audit of scripts, APIs, reCAPTCHA, media, and fonts. HSTS is also deployment-specific and should be enabled only on an HTTPS-only host after its scope and lifetime are understood.
+
 ## License
 
-MIT (c) Andrés Trujillo [Mateus] byUwUr
+MIT (c) Andres Trujillo [Mateus] byUwUr
